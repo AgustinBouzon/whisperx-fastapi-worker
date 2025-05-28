@@ -50,7 +50,7 @@ COMPUTE_TYPE_CPU = "int8"     # o "float32" para CPU si "int8" da problemas
 # --- Funciones auxiliares ---
 def get_model(model_name: str, device: str, compute_type: str, language: str = None):
     logger.info(f"Entering get_model. Current loaded_models keys: {list(loaded_models.keys())}")
-<<<<<<< HEAD
+
     # Agregar 'language' a la clave si es 'large-v3' para forzar la recarga si cambia el idioma,
     # ya que 'large-v3' se comporta diferente con/sin especificación de idioma en la carga.
     model_key_suffix = f"_lang-{language}" if model_name == "large-v3" and language else ""
@@ -76,15 +76,8 @@ def get_model(model_name: str, device: str, compute_type: str, language: str = N
         except Exception as e:
             logger.error(f"Error cargando modelo Whisper {model_name}: {e}", exc_info=True)
             raise HTTPException(status_code=500, detail=f"Error al cargar modelo Whisper: {str(e)}")
-    return loaded_models[model_key]
-=======
-    model_key_suffix = f"_lang-{language}" if model_name == "large-v3" and language else ""
-    model_key = (model_name + model_key_suffix, device, compute_type)
-
-    if model_key in loaded_models:
-        logger.info(f"Model {model_key} found in cache. Moving to end (most recently used).")
-        loaded_models.move_to_end(model_key)
         return loaded_models[model_key]
+
 
     logger.info(f"Model {model_key} not found in cache. Attempting to load.")
 
