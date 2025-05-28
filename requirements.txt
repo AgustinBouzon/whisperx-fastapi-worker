@@ -4,7 +4,7 @@ python-multipart
 
 # WhisperX y sus dependencias principales
 # Se instala desde git para tener la última versión
-whisperx @ git+https://github.com/m-bain/whisperX.git
+whisperx @ git+https://github.com/m-bain/whisperX.git@5012650d0f3d8966f3ea517762f952a624996d32
 
 # PyTorch y Torchaudio - Las versiones específicas con CUDA se manejarán en el Dockerfile
 # para asegurar la compatibilidad con la imagen base.
