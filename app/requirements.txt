@@ -1,0 +1,27 @@
+fastapi
+uvicorn[standard]
+python-multipart
+
+# WhisperX y sus dependencias principales
+# Se instala desde git para tener la última versión
+whisperx @ git+https://github.com/m-bain/whisperX.git
+
+# PyTorch y Torchaudio - Las versiones específicas con CUDA se manejarán en el Dockerfile
+# para asegurar la compatibilidad con la imagen base.
+# Aquí se listan sin sufijo CUDA como referencia o para entornos locales.
+torch>=2.0.0
+torchaudio>=2.0.0
+
+# Para diarización (requiere token de Hugging Face)
+#pyannote.audio==3.1.1 # o una versión más reciente compatible
+pyannote.audio==3.3.2
+
+# Dependencias para manejo de audio y otras utilidades
+ffmpeg-python
+soundfile
+# numpy # whisperx/torch ya lo traen
+# tqdm # whisperx ya lo trae
+
+# Opcional pero recomendado por WhisperX para rendimiento en GPU (FasterWhisper)
+# Si hay problemas de compilación en Docker, se puede omitir o instalar condicionalmente.
+# triton>=2.0.0 # WhisperX lo gestiona como dependencia opcional
