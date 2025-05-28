@@ -9,17 +9,17 @@ import whisperx
 import logging
 import collections
 from pyannote.audio import Pipeline
-from pyannote.core import Annotation # Para el type hint y el isinstance
-import traceback # For detailed error logging
+from pyannote.core import Annotation 
+import traceback
 
 # Configuración de logging
-logging.basicConfig(level=logging.DEBUG) # O logging.DEBUG para más detalle
+logging.basicConfig(level=logging.INFO) # Cambiar a logging.DEBUG para depuración
 logger = logging.getLogger(__name__)
 
 app = FastAPI(
     title="WhisperX API (GPU)",
     description="API para transcripción de audio usando WhisperX con alineación y diarización, optimizada para GPU.",
-    version="0.1.5" # Integrando parches en la base 0.1.1
+    version="0.1.6" 
 )
 
 # Variables globales para los modelos
@@ -67,8 +67,9 @@ def get_model(model_name: str, device: str, compute_type: str, language: str = N
             if device == "cuda":
                 torch.cuda.empty_cache()
             logger.info(f"Model {oldest_key} evicted and CUDA cache cleared (if on CUDA).")
-        except Exception as e:
+        except Exception as e: # Capturar cualquier excepción durante la eliminación
             logger.error(f"Error during eviction of model {oldest_key}: {e}", exc_info=True)
+
 
     logger.info(f"Loading Whisper model: {model_name} ({model_key_suffix.replace('_lang-','') if model_key_suffix else 'no lang specified'}) on {device} with compute_type {compute_type}")
     try:
@@ -90,7 +91,7 @@ def get_model(model_name: str, device: str, compute_type: str, language: str = N
         return new_model
     except Exception as e:
         logger.error(f"Error loading Whisper model {model_key}: {e}", exc_info=True)
-        if model_key in loaded_models:
+        if model_key in loaded_models: # Asegurar que no quede una clave parcial si la carga falla
              del loaded_models[model_key]
         raise HTTPException(status_code=500, detail=f"Error loading Whisper model {model_key}: {str(e)}")
 
@@ -114,7 +115,7 @@ def get_alignment_model(language_code: str, device: str):
     return loaded_alignment_models[align_key]
 
 def get_diarization_pipeline(hf_token: str, device: str):
-    diarize_key = device
+    diarize_key = device 
     if diarize_key not in loaded_diarization_pipelines:
         if not hf_token:
             logger.warning("No se proporcionó HF_TOKEN. La diarización no se cargará/utilizará si el modelo no está cacheado localmente.")
@@ -125,25 +126,25 @@ def get_diarization_pipeline(hf_token: str, device: str):
                 pipeline.to(torch.device(device))
             loaded_diarization_pipelines[diarize_key] = pipeline
             logger.info("Pipeline de diarización cargada.")
-        except ImportError:
+        except ImportError: # Específicamente para pyannote.audio no instalado
             logger.error("pyannote.audio no está instalado. Por favor, instálalo para usar diarización.")
-            loaded_diarization_pipelines[diarize_key] = None
+            loaded_diarization_pipelines[diarize_key] = None # Marcar como no disponible
             return None
-        except Exception as e:
+        except Exception as e: # Capturar otras excepciones (token HF, red, etc.)
             logger.error(f"Error cargando pipeline de diarización: {e}", exc_info=True)
-            loaded_diarization_pipelines[diarize_key] = None
+            loaded_diarization_pipelines[diarize_key] = None # Marcar como no disponible
             if "401 Client Error" in str(e) or "Unauthorized" in str(e) or "authentication" in str(e).lower():
                  raise HTTPException(status_code=401, detail=f"Error de autenticación al cargar pipeline de diarización: {str(e)}. Verifique su HF_TOKEN.")
             raise HTTPException(status_code=500, detail=f"Error al cargar pipeline de diarización: {str(e)}.")
     
+    # Si la pipeline se marcó como None en un intento anterior, devolver None.
     if loaded_diarization_pipelines.get(diarize_key) is None and diarize_key in loaded_diarization_pipelines:
         logger.warning("Pipeline de diarización no pudo ser cargada previamente.")
         return None
         
     return loaded_diarization_pipelines.get(diarize_key)
+# --- FIN Funciones auxiliares ---
 
-
-# --- Endpoint de Transcripción ---
 @app.post("/transcribe/")
 async def transcribe_audio(
     audio_file: UploadFile = File(...),
@@ -162,13 +163,14 @@ async def transcribe_audio(
 
     temp_dir = tempfile.mkdtemp()
     original_filename = audio_file.filename if audio_file.filename else "audiofile"
+    # Limpieza básica del nombre de archivo para evitar problemas de path
     safe_original_filename = "".join(c for c in original_filename if c.isalnum() or c in ['.', '_', '-']).strip()
-    if not safe_original_filename: safe_original_filename = "audio.tmp"
+    if not safe_original_filename: safe_original_filename = "audio.tmp" # Fallback si el nombre se vacía
     temp_audio_path = os.path.join(temp_dir, f"{uuid.uuid4()}_{safe_original_filename}")
 
     response_warnings = {}
     raw_speaker_activity = None
-    detected_language = None
+    detected_language = None # Inicializar para asegurar que esté definido
 
     try:
         with open(temp_audio_path, "wb") as buffer:
@@ -178,23 +180,26 @@ async def transcribe_audio(
         model = get_model(model_name, DEVICE, current_compute_type, language=language if model_name == "large-v3" else None)
 
         transcribe_kwargs = {}
-        if language:
-            transcribe_kwargs['language'] = language
+        if language: transcribe_kwargs['language'] = language
         
+        # model.transcribe de WhisperX devuelve un diccionario
         result: dict = model.transcribe(temp_audio_path, batch_size=batch_size, print_progress=False, **transcribe_kwargs)
         
+        # Verificación de la estructura del resultado de la transcripción inicial
         if not isinstance(result, dict) or "language" not in result or "segments" not in result:
             logger.error(f"Resultado inesperado de model.transcribe. Tipo: {type(result)}. Valor: {str(result)[:500]}")
+            # No continuar si la estructura básica no está presente
             raise HTTPException(status_code=500, detail="Error interno: la transcripción inicial no devolvió la estructura esperada.")
         
-        detected_language = result.get("language")
+        detected_language = result.get("language") # Usar .get() por si 'language' es None
         logger.info(f"Transcripción inicial completada. Idioma detectado/usado: {detected_language}")
 
         loaded_audio_data = None
         alignment_performed_for_words = False
 
+        # 3. Alinear transcripción (opcional)
         if align_audio and word_level_timestamps:
-            if not detected_language:
+            if not detected_language: # Necesitamos un idioma para cargar el modelo de alineación
                 logger.warning("No se pudo detectar el idioma, saltando la alineación para marcas de tiempo de palabras.")
                 response_warnings["alignment"] = "No se pudo determinar el idioma para la alineación de palabras."
             else:
@@ -205,40 +210,55 @@ async def transcribe_audio(
                         logger.info("Cargando datos de audio para alineación...")
                         loaded_audio_data = whisperx.load_audio(temp_audio_path)
                     
-                    aligned_segments = whisperx.align( # whisperx.align devuelve una LISTA de segmentos
-                        result["segments"], 
+                    # whisperx.align devuelve una LISTA de segmentos alineados
+                    aligned_segments = whisperx.align(
+                        result["segments"], # Pasar solo la lista de segmentos
                         align_model,
                         align_metadata,
                         loaded_audio_data,
                         DEVICE,
                         return_char_alignments=False
                     )
-                    result["segments"] = aligned_segments # Actualizar los segmentos en el dict 'result'
+                    # Actualizar la clave 'segments' en el diccionario 'result'
+                    result["segments"] = aligned_segments
                     
+                    # Verificar si la alineación realmente produjo información de palabras
                     if aligned_segments and isinstance(aligned_segments, list) and len(aligned_segments) > 0 and \
                        isinstance(aligned_segments[0], dict) and "words" in aligned_segments[0]:
                         alignment_performed_for_words = True
                         logger.info("Alineación para marcas de tiempo de palabras completada.")
-                    else:
+                    else: # La alineación se ejecutó pero no parece haber 'words'
                         logger.warning("Alineación realizada, pero los segmentos no parecen tener información de palabras.")
-                        response_warnings["alignment"] = "Alineación realizada, pero sin información de palabras detectada."
+                        # Loguear más detalles si el nivel es DEBUG
+                        if logger.isEnabledFor(logging.DEBUG):
+                            if aligned_segments and isinstance(aligned_segments, list) and len(aligned_segments) > 0 and isinstance(aligned_segments[0], dict):
+                                logger.debug(f"Primer segmento alineado (sin 'words'?): {str(aligned_segments[0])[:500]}")
+                            elif not aligned_segments : # Cubre None o lista vacía
+                                logger.debug("aligned_segments está vacío o es None después de whisperx.align")
+                            else: # aligned_segments no es lista o el primer elemento no es dict
+                                logger.debug(f"aligned_segments tiene estructura inesperada: type={type(aligned_segments)}, len={len(aligned_segments) if isinstance(aligned_segments, list) else 'N/A'}")
+                        response_warnings["alignment"] = "Alineación realizada, pero sin información de palabras detectada en los segmentos."
                         
-                except HTTPException as e:
-                    logger.warning(f"No se pudo realizar la alineación para marcas de tiempo de palabras: {e.detail}")
-                    response_warnings["alignment"] = f"Alineación de palabras fallida: {e.detail}"
-                except Exception as e:
-                    logger.error(f"Error inesperado durante la alineación de palabras: {e}", exc_info=True)
-                    response_warnings["alignment"] = f"Error inesperado en alineación de palabras: {str(e)}"
+                except HTTPException as e_align_http: # Errores de carga de modelo de alineación
+                    logger.warning(f"No se pudo realizar la alineación para marcas de tiempo de palabras: {e_align_http.detail}")
+                    response_warnings["alignment"] = f"Alineación de palabras fallida: {e_align_http.detail}"
+                except Exception as e_align_generic: # Otros errores durante la alineación
+                    logger.error(f"Error inesperado durante la alineación de palabras: {e_align_generic}", exc_info=True)
+                    response_warnings["alignment"] = f"Error inesperado en alineación de palabras: {str(e_align_generic)}"
         elif align_audio and not word_level_timestamps:
-            logger.info("Alineación solicitada (`align_audio=True`) pero `word_level_timestamps=False`. No se realizará alineación para marcas de tiempo de palabras.")
+            logger.info("Alineación solicitada (`align_audio=True`) pero `word_level_timestamps=False`. No se realizará alineación para palabras.")
         elif not align_audio:
             logger.info("Alineación no solicitada (`align_audio=False`).")
 
-        if not isinstance(result, dict): # Verificación defensiva
+        # Verificación defensiva: asegurar que 'result' siga siendo un diccionario después de la alineación
+        if not isinstance(result, dict):
             logger.error(f"CRITICAL: 'result' no es un diccionario después de la sección de alineación. Tipo: {type(result)}. Forzando a estructura básica.")
+            # Fallback para intentar continuar, aunque los resultados serán limitados
             result = {"segments": [], "language": detected_language if detected_language else None, "text": ""}
             response_warnings["internal_error_structure"] = "Error de estructura interna (post-alineación), resultados pueden ser incompletos."
 
+
+        # 4. Diarizar (opcional)
         word_level_diarization_assigned = False
         speaker_turns_generated = False
 
@@ -246,14 +266,14 @@ async def transcribe_audio(
             diarize_pipeline = None
             try:
                 diarize_pipeline = get_diarization_pipeline(hf_token, DEVICE)
-            except HTTPException as e:
-                logger.warning(f"No se pudo cargar/obtener la pipeline de diarización: {e.detail}")
-                response_warnings["diarization"] = f"Pipeline de diarización no disponible: {e.detail}"
+            except HTTPException as e_get_diarize: # Errores de carga de pipeline de diarización
+                logger.warning(f"No se pudo cargar/obtener la pipeline de diarización: {e_get_diarize.detail}")
+                response_warnings["diarization"] = f"Pipeline de diarización no disponible: {e_get_diarize.detail}"
             
             if diarize_pipeline:
                 logger.info("Iniciando diarización de turnos de hablante...")
                 try:
-                    if loaded_audio_data is None:
+                    if loaded_audio_data is None: # Cargar audio si no se hizo para alineación
                         logger.info("Cargando datos de audio para diarización...")
                         loaded_audio_data = whisperx.load_audio(temp_audio_path)
                     
@@ -275,7 +295,7 @@ async def transcribe_audio(
                             uri_patch_name = os.path.basename(temp_audio_path)
                             logger.info(f"PARCHE v2: Intentando cambiar URI de Annotation de 'waveform' a '{uri_patch_name}'.")
                             new_annotation = Annotation(uri=uri_patch_name, modality=diarize_segments_pyannote.modality)
-                            for segment_pa, track_pa, label_pa in diarize_segments_pyannote.itertracks(yield_label=True): # Renombrar para evitar conflicto
+                            for segment_pa, track_pa, label_pa in diarize_segments_pyannote.itertracks(yield_label=True):
                                 new_annotation[segment_pa, track_pa] = label_pa
                             diarize_segments_pyannote = new_annotation
                             logger.debug(f"PARCHE v2: Nuevo URI de diarize_segments_pyannote: {diarize_segments_pyannote.uri}")
@@ -284,44 +304,87 @@ async def transcribe_audio(
                     # --- FIN: Intento de parche v2 ---
 
                     if alignment_performed_for_words:
-                        current_segments = result.get("segments", [])
+                        current_segments = result.get("segments", []) # Obtener segmentos del dict 'result'
+                        # Verificar que los segmentos tengan la estructura esperada para assign_word_speakers
                         if isinstance(current_segments, list) and \
                            (len(current_segments) == 0 or (len(current_segments) > 0 and isinstance(current_segments[0], dict) and "words" in current_segments[0])):
                             try:
                                 logger.info("Asignando hablantes a palabras...")
-                                # logger.debug(f"Type of diarize_segments_pyannote: {type(diarize_segments_pyannote)}, URI: {getattr(diarize_segments_pyannote, 'uri', 'N/A')}")
-                                # logger.debug(f"Keys in 'result' for assign_word_speakers: {list(result.keys())}")
-                                # logger.debug(f"Sample of first transcript segment for assign: {str(current_segments[0])[:200] if current_segments else 'No segments'}")
+                                # Logs de depuración (opcionales, controlados por nivel de logging)
+                                if logger.isEnabledFor(logging.DEBUG):
+                                    logger.debug(f"Type of diarize_segments_pyannote: {type(diarize_segments_pyannote)}, URI: {getattr(diarize_segments_pyannote, 'uri', 'N/A')}")
+                                    logger.debug(f"Keys in 'result' for assign_word_speakers: {list(result.keys()) if isinstance(result, dict) else 'result no es dict'}")
+                                    logger.debug(f"Sample of first transcript segment for assign: {str(current_segments[0])[:200] if current_segments else 'No segments'}")
 
-                                result_with_speakers = whisperx.assign_word_speakers(diarize_segments_pyannote, result)
-                                result = result_with_speakers 
+                                result_with_speakers = whisperx.assign_word_speakers(diarize_segments_pyannote, result) # 'result' es un dict
+                                result = result_with_speakers # assign_word_speakers devuelve un nuevo dict
                                 word_level_diarization_assigned = True
                                 logger.info("Asignación de hablantes a palabras completada.")
                             except KeyError as e_key:
                                 tb_str = traceback.format_exc(); msg = f"Fallo en asignación de hablantes (KeyError: {repr(e_key)})."
-                                logger.error(msg + f"\nTraceback:\n{tb_str}")
+                                logger.error(msg + f"\nTraceback:\n{tb_str}") # Loguear el traceback completo
                                 response_warnings["diarization_word_assignment"] = msg
-                            except Exception as e_assign:
+                            except Exception as e_assign: # Otras excepciones durante la asignación
                                 tb_str = traceback.format_exc(); msg = f"Error ({type(e_assign).__name__}) en asignación de hablantes: {str(e_assign)}"
-                                logger.error(msg + f"\nTraceback:\n{tb_str}", exc_info=False)
+                                logger.error(msg + f"\nTraceback:\n{tb_str}", exc_info=False) # FastAPI ya loguea con exc_info=True para errores 500
                                 response_warnings["diarization_word_assignment"] = msg
-                        else:
+                        else: # Los segmentos no tienen la estructura esperada (ej. sin 'words')
                             msg = "Segmentos de transcripción no tienen 'words' o estructura incorrecta. No se asignan hablantes a palabras."
-                            logger.warning(msg + f" (Primer segmento: {str(current_segments[0])[:200] if current_segments else 'Vacío'})")
+                            logger.warning(msg + f" (Primer segmento: {str(current_segments[0])[:200] if current_segments and isinstance(current_segments,list) and len(current_segments)>0 and isinstance(current_segments[0], dict) else 'Estructura inesperada o vacío'})")
                             response_warnings["diarization_word_assignment"] = msg
-                    else:
+                    else: # alignment_performed_for_words es False
                         msg = "Asignación de hablantes a palabras omitida: alineación para palabras no realizada/exitosa."
                         logger.info(msg)
-                        if "diarization" not in response_warnings: response_warnings["diarization"] = msg
-                except HTTPException: raise
-                except Exception as e:
-                    msg = f"Error durante la diarización: {str(e)}"; logger.error(msg, exc_info=True)
+                        if "diarization" not in response_warnings: # No sobrescribir un error más específico
+                            response_warnings["diarization"] = msg
+                except HTTPException as e_diarize_http: # Re-elevar HTTPExceptions de get_diarization_pipeline
+                    raise e_diarize_http
+                except Exception as e_diarize_generic: # Otros errores durante la diarización
+                    msg = f"Error durante la diarización: {str(e_diarize_generic)}"; logger.error(msg, exc_info=True)
                     response_warnings["diarization"] = msg
         elif not diarize_audio:
             logger.info("Diarización no solicitada.")
 
-        logger.debug(f"Antes de final_response: type(result)={type(result)}, result_keys={list(result.keys()) if isinstance(result, dict) else 'N/A'}, result_segments_sample={str(result.get('segments', [])[:1])[:200] if isinstance(result, dict) else str(result)[:200]}")
+        # --- INICIO: Logging de depuración descompuesto para 'result' ---
+        if logger.isEnabledFor(logging.DEBUG): # Solo ejecutar si el logging DEBUG está activo
+            logger.debug(f"Punto de control A: Iniciando logs pre-final_response.")
+            result_type_str = "N/A"
+            try: result_type_str = str(type(result))
+            except Exception as e_log_type: logger.error(f"Error al obtener type(result) para log: {e_log_type}")
+            logger.debug(f"Punto de control B: type(result)={result_type_str}")
 
+            result_keys_str = "N/A (result no es dict)"
+            if isinstance(result, dict):
+                try: result_keys_str = str(list(result.keys()))
+                except TypeError as e_log_keys: 
+                    logger.error(f"TypeError al obtener list(result.keys()): {e_log_keys}. Claves podrían contener slices.")
+                    result_keys_str = f"Error al listar claves (TypeError): {e_log_keys}"
+                except Exception as e_log_keys_other:
+                    logger.error(f"Error general al obtener list(result.keys()): {e_log_keys_other}")
+                    result_keys_str = f"Error general al listar claves: {e_log_keys_other}"
+            logger.debug(f"Punto de control C: result_keys={result_keys_str}")
+
+            result_segments_sample_str = "N/A"
+            if isinstance(result, dict):
+                segments_for_log = result.get('segments', [])
+                if isinstance(segments_for_log, list) and len(segments_for_log) > 0 and isinstance(segments_for_log[0], dict) :
+                    try: result_segments_sample_str = str(segments_for_log[0])[:200]
+                    except Exception as e_log_seg:
+                        logger.error(f"Error al convertir primer segmento a str para log: {e_log_seg}")
+                        result_segments_sample_str = f"Error al convertir segmento: {e_log_seg}"
+                elif isinstance(segments_for_log, list) and len(segments_for_log) == 0:
+                    result_segments_sample_str = "Lista de segmentos vacía"
+                else: 
+                    result_segments_sample_str = f"result['segments'] estructura inesperada: type={type(segments_for_log)}"
+            else: 
+                try: result_segments_sample_str = str(result)[:200]
+                except Exception as e_log_res_str:
+                    logger.error(f"Error al convertir 'result' (no dict) a str para log: {e_log_res_str}")
+                    result_segments_sample_str = f"Error al convertir result (no dict): {e_log_res_str}"
+            logger.debug(f"Punto de control D: result_segments_sample (o result)={result_segments_sample_str}")
+        # --- FIN: Logging de depuración descompuesto ---
+
+        # Construcción de la respuesta final, asegurando que 'result' sea un diccionario
         if not isinstance(result, dict):
             logger.error(f"CRITICAL: 'result' no es un diccionario antes de construir final_response. Tipo: {type(result)}. Valor: {str(result)[:500]}")
             result_segments_for_text = []
@@ -331,26 +394,27 @@ async def transcribe_audio(
             response_warnings["internal_error_final_result"] = "Estructura de resultado final corrupta."
         else:
             result_segments_for_text = result.get("segments", [])
-            if not isinstance(result_segments_for_text, list):
-                logger.warning(f"result['segments'] no es una lista, es {type(result_segments_for_text)}. Vaciando para full_text.")
+            if not isinstance(result_segments_for_text, list): # Fallback si 'segments' no es una lista
+                logger.warning(f"result['segments'] no es una lista, es {type(result_segments_for_text)}. Vaciando para full_text y segments.")
                 result_segments_for_text = []
             
             texts = []
-            for s_item in result_segments_for_text: # Renombrar s para evitar conflicto con s del nivel superior
+            for s_item in result_segments_for_text: # 's_item' para evitar conflicto con 's' de nivel superior
                 if isinstance(s_item, dict):
                     texts.append(s_item.get('text', '').strip())
-                else:
+                else: # Elemento inesperado en la lista de segmentos
                     logger.warning(f"Elemento en segments no es un dict: {type(s_item)}. Omitiendo para full_text.")
             result_text_for_full = " ".join(texts)
             
-            result_lang_for_final = result.get("language", detected_language)
+            result_lang_for_final = result.get("language", detected_language) # Usar lenguaje de 'result' si está, sino el detectado
             result_lang_prob_for_final = result.get("language_probability")
+
 
         final_response = {
             "language": result_lang_for_final,
             "language_probability": result_lang_prob_for_final,
-            "segments": result_segments_for_text,
-            "full_text": result.get("text", result_text_for_full) if isinstance(result, dict) else result_text_for_full,
+            "segments": result_segments_for_text, # Ya es una lista (o lista vacía)
+            "full_text": result.get("text", result_text_for_full) if isinstance(result, dict) else result_text_for_full, # Usar result.get("text") si existe, sino el reconstruido
             "options_used": {
                 "model_name": model_name, "language_requested": language, "batch_size": batch_size,
                 "alignment_requested_for_words": align_audio and word_level_timestamps,
@@ -367,20 +431,25 @@ async def transcribe_audio(
 
         return JSONResponse(content=final_response)
 
-    except HTTPException as e_http: # Renombrar para evitar conflicto
+    except HTTPException as e_http: # Renombrar para evitar conflicto de variable 'e'
         logger.error(f"HTTP Exception: {e_http.detail}")
+        # Limpieza en caso de HTTPException
         if os.path.exists(temp_dir): shutil.rmtree(temp_dir)
         if audio_file: audio_file.file.close()
-        raise e_http
-    except Exception as e_generic: # Renombrar para evitar conflicto
+        raise e_http # Re-elevar la excepción
+    except Exception as e_generic: # Renombrar para evitar conflicto de variable 'e'
         logger.error(f"Error procesando la solicitud: {e_generic}", exc_info=True)
+        # Limpieza en caso de Exception genérica
         if os.path.exists(temp_dir): shutil.rmtree(temp_dir)
         if audio_file: audio_file.file.close()
         raise HTTPException(status_code=500, detail=f"Error interno del servidor: {str(e_generic)}")
     finally:
-        if 'temp_dir' in locals() and os.path.exists(temp_dir): shutil.rmtree(temp_dir)
-        if audio_file and not audio_file.file.closed: audio_file.file.close()
-
+        # Bloque finally para asegurar limpieza, incluso si ya se hizo en un except
+        if 'temp_dir' in locals() and os.path.exists(temp_dir): # locals() para asegurar que temp_dir fue definido
+            shutil.rmtree(temp_dir)
+            logger.info(f"Directorio temporal {temp_dir} eliminado (bloque finally).")
+        if audio_file and hasattr(audio_file, 'file') and not audio_file.file.closed: # Más robusto
+            audio_file.file.close()
 
 @app.get("/health")
 async def health_check():
@@ -398,8 +467,8 @@ async def health_check():
 
 if __name__ == "__main__":
     import uvicorn
-    # Para probar con logs de depuración:
-    # logging.getLogger().setLevel(logging.DEBUG) 
+    # Para desarrollo local, descomentar para logs DEBUG:
+    # logging.getLogger().setLevel(logging.DEBUG)
     # for handler in logging.getLogger().handlers:
     #    handler.setLevel(logging.DEBUG)
     # logger.info("Nivel de logging establecido en DEBUG para desarrollo local.")
