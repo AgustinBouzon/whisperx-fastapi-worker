@@ -244,6 +244,11 @@ async def transcribe_audio(
                 if diarize_pipeline:
                     logger.info("Iniciando diarización...")
                     try:
+<<<<<<< HEAD
+                        audio_for_diarize = whisperx.load_audio(temp_audio_path) # Recargar o usar el ya cargado si aplica
+                        diarize_segments = diarize_pipeline(
+                            {"waveform": torch.from_numpy(audio_for_diarize).unsqueeze(0), "sample_rate": 16000},
+=======
                         if loaded_audio_data is None:
                             # Este caso no debería ocurrir si la alineación (que carga el audio) es un prerrequisito.
                             logger.error("Error crítico: loaded_audio_data es None antes de la diarización, pero la alineación debió cargarlo.")
@@ -251,7 +256,8 @@ async def transcribe_audio(
 
                         logger.info("Usando datos de audio cargados previamente para diarización.")
                         diarize_segments = diarize_pipeline(
-                            {"waveform": torch.from_numpy(loaded_audio_data).unsqueeze(0), "sample_rate": whisperx.SAMPLE_RATE},
+                            {"waveform": torch.from_numpy(loaded_audio_data).unsqueeze(0), "sample_rate": 16000},
+>>>>>>> origin/general-adjustments
                             min_speakers=min_speakers,
                             max_speakers=max_speakers
                         )
