@@ -257,12 +257,17 @@ async def transcribe_audio(
                         )
                         # Asegurarse de que 'result' contenga segmentos con 'words'
                         if "segments" in result and result["segments"] and "words" in result["segments"][0]:
-                            result_with_speakers = whisperx.assign_word_speakers(diarize_segments, result)
-                            result["segments"] = result_with_speakers["segments"] # Actualizar segmentos con la info de speaker
-                            # assign_word_speakers puede añadir un top-level 'speaker_segments' si se quiere
-                            # result["speaker_segments"] = diarize_segments # Opcional: devolver los segmentos puros de pyannote
-                            logger.info("Diarización completada y asignada.")
-                            diarization_performed_successfully = True
+                            try:
+                                result_with_speakers = whisperx.assign_word_speakers(diarize_segments, result)
+                                result["segments"] = result_with_speakers["segments"] # Actualizar segmentos con la info de speaker
+                                # assign_word_speakers puede añadir un top-level 'speaker_segments' si se quiere
+                                # result["speaker_segments"] = diarize_segments # Opcional: devolver los segmentos puros de pyannote
+                                logger.info("Diarización completada y asignada.")
+                                diarization_performed_successfully = True
+                            except KeyError as e:
+                                logger.warning(f"Skipping word-level speaker assignment due to KeyError: {e}. This might be due to unexpected speaker labels from the diarization pipeline. Diarization segments from pyannote might be {diarize_segments}.")
+                                result["warning_diarization"] = f"Fallo en asignación de hablantes a palabras debido a etiqueta inesperada: {e}. Los segmentos de la diarización podrían ser problemáticos."
+                                # diarization_performed_successfully remains False or is not set to True
                         else:
                             logger.warning("Los segmentos de transcripción no contienen información de palabras (posible fallo de alineación). No se pueden asignar hablantes a palabras.")
                             result["warning_diarization"] = "Fallo de alineación impidió asignación de hablantes a palabras."
