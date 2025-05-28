@@ -27,6 +27,7 @@ ENV PYTHONUNBUFFERED=1 \
 
 # Instalar dependencias del sistema: ffmpeg es crucial, git para instalar whisperx desde repo
 # La imagen pytorch/pytorch ya es ubuntu-based y tiene muchas cosas.
+ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     git \
