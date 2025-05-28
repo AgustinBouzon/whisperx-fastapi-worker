@@ -22,7 +22,8 @@ ENV PYTHONUNBUFFERED=1 \
     # Caché de modelos Whisper (whisperx los descarga aquí por defecto si no se especifica download_root)
     # Si whisperx usa ~/.cache/whisper, este se mapearía a XDG_CACHE_HOME/whisper
     # Para ser explícitos, podríamos configurar download_root en load_model, pero XDG_CACHE_HOME debería cubrirlo.
-    PATH="/opt/conda/bin:${PATH}" # Asegurar que conda/pip de la imagen base estén en PATH
+    PATH="/opt/conda/bin:${PATH}" 
+    # Asegurar que conda/pip de la imagen base estén en PATH
 
 # Instalar dependencias del sistema: ffmpeg es crucial, git para instalar whisperx desde repo
 # La imagen pytorch/pytorch ya es ubuntu-based y tiene muchas cosas.
