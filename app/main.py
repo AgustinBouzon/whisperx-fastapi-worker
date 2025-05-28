@@ -157,6 +157,68 @@ def get_diarization_pipeline(hf_token: str, device: str):
             raise HTTPException(status_code=500, detail=f"Error al cargar pipeline de diarización: {str(e)}. Verifique su HF_TOKEN y la conexión a Hugging Face.")
     return loaded_diarization_pipelines[diarize_key]
 
+# --- Helper function to clear models from memory ---
+def _clear_models_from_memory():
+    global loaded_models, loaded_alignment_models, loaded_diarization_pipelines, DEVICE, logger
+
+    logger.info("Starting to clear all AI models from memory...")
+
+    # Clear Whisper models
+    if loaded_models:
+        logger.info(f"Clearing {len(loaded_models)} Whisper model(s)...")
+        # Iterate over a copy of values if direct deletion during iteration is problematic
+        models_to_delete = list(loaded_models.values())
+        for model in models_to_delete:
+            try:
+                del model
+            except Exception as e:
+                logger.error(f"Error deleting a Whisper model object: {e}", exc_info=True)
+        loaded_models.clear()
+        logger.info("Whisper models dictionary cleared.")
+
+    # Clear Alignment models
+    if loaded_alignment_models:
+        logger.info(f"Clearing {len(loaded_alignment_models)} Alignment model(s)...")
+        alignment_models_to_delete = list(loaded_alignment_models.values())
+        for model_tuple in alignment_models_to_delete:
+            if isinstance(model_tuple, tuple) and len(model_tuple) == 2:
+                model_a, metadata_a = model_tuple
+                try:
+                    del model_a
+                except Exception as e:
+                    logger.error(f"Error deleting alignment model_a: {e}", exc_info=True)
+                try:
+                    del metadata_a
+                except Exception as e:
+                    logger.error(f"Error deleting alignment metadata_a: {e}", exc_info=True)
+            else:
+                logger.warning(f"Unexpected item in loaded_alignment_models: {model_tuple}")
+        loaded_alignment_models.clear()
+        logger.info("Alignment models dictionary cleared.")
+
+    # Clear Diarization pipelines
+    if loaded_diarization_pipelines:
+        logger.info(f"Clearing {len(loaded_diarization_pipelines)} Diarization pipeline(s)...")
+        pipelines_to_delete = list(loaded_diarization_pipelines.values())
+        for pipeline in pipelines_to_delete:
+            if pipeline is not None: # Ensure pipeline is not None before attempting deletion
+                try:
+                    del pipeline
+                except Exception as e:
+                    logger.error(f"Error deleting a Diarization pipeline object: {e}", exc_info=True)
+        loaded_diarization_pipelines.clear()
+        logger.info("Diarization pipelines dictionary cleared.")
+
+    if DEVICE == "cuda":
+        logger.info("Clearing CUDA cache...")
+        try:
+            torch.cuda.empty_cache()
+            logger.info("CUDA cache cleared.")
+        except Exception as e:
+            logger.error(f"Error clearing CUDA cache: {e}", exc_info=True)
+    
+    logger.info("Model clearing process completed.")
+
 # --- Endpoint de Transcripción ---
 @app.post("/transcribe/")
 async def transcribe_audio(
@@ -311,6 +373,9 @@ async def transcribe_audio(
             logger.info(f"Directorio temporal {temp_dir} eliminado.")
         if audio_file:
             audio_file.file.close()
+        
+        # Aggressively clear models from memory after each request
+        _clear_models_from_memory()
 
 @app.get("/health")
 async def health_check():
