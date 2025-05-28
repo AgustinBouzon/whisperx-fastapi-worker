@@ -7,6 +7,10 @@ from fastapi.responses import JSONResponse
 import torch
 import whisperx
 import logging
+<<<<<<< HEAD
+=======
+import collections
+>>>>>>> origin/general-adjustments
 
 # Configuración de logging
 logging.basicConfig(level=logging.INFO)
@@ -19,7 +23,11 @@ app = FastAPI(
 )
 
 # Variables globales para los modelos
+<<<<<<< HEAD
 loaded_models = {}
+=======
+# loaded_models ahora es un OrderedDict para la gestión LRU de modelos Whisper
+>>>>>>> origin/general-adjustments
 loaded_alignment_models = {}
 loaded_diarization_pipelines = {}
 
@@ -34,6 +42,16 @@ if DEVICE == "cuda":
 else:
     logger.warning("CUDA no está disponible. La API se ejecutará en CPU, lo cual será significativamente más lento.")
 
+<<<<<<< HEAD
+=======
+# Configuración de MAX_WHISPER_MODELS
+MAX_WHISPER_MODELS = int(os.environ.get("MAX_WHISPER_MODELS", "1")) # Default to 1 model
+if MAX_WHISPER_MODELS <= 0: # Treat 0 or negative as unlimited (effectively disabling unloading)
+    MAX_WHISPER_MODELS = float('inf')
+logger.info(f"Maximum concurrent Whisper models allowed in memory: {MAX_WHISPER_MODELS if MAX_WHISPER_MODELS != float('inf') else 'Unlimited'}")
+
+loaded_models = collections.OrderedDict() # Usar OrderedDict para LRU
+>>>>>>> origin/general-adjustments
 
 # Tipos de cómputo recomendados para GPU y CPU
 COMPUTE_TYPE_GPU = "float16"  # o "int8" para menor VRAM y mayor velocidad, con posible pérdida de precisión
@@ -41,6 +59,7 @@ COMPUTE_TYPE_CPU = "int8"     # o "float32" para CPU si "int8" da problemas
 
 # --- Funciones auxiliares ---
 def get_model(model_name: str, device: str, compute_type: str, language: str = None):
+<<<<<<< HEAD
     # Agregar 'language' a la clave si es 'large-v3' para forzar la recarga si cambia el idioma,
     # ya que 'large-v3' se comporta diferente con/sin especificación de idioma en la carga.
     model_key_suffix = f"_lang-{language}" if model_name == "large-v3" and language else ""
@@ -67,6 +86,69 @@ def get_model(model_name: str, device: str, compute_type: str, language: str = N
             logger.error(f"Error cargando modelo Whisper {model_name}: {e}", exc_info=True)
             raise HTTPException(status_code=500, detail=f"Error al cargar modelo Whisper: {str(e)}")
     return loaded_models[model_key]
+=======
+    model_key_suffix = f"_lang-{language}" if model_name == "large-v3" and language else ""
+    model_key = (model_name + model_key_suffix, device, compute_type)
+
+    if model_key in loaded_models:
+        logger.info(f"Model {model_key} found in cache. Moving to end (most recently used).")
+        loaded_models.move_to_end(model_key)
+        return loaded_models[model_key]
+    
+    logger.info(f"Model {model_key} not found in cache. Attempting to load.")
+
+    # Check if cache is full and needs eviction
+    if len(loaded_models) >= MAX_WHISPER_MODELS:
+        # Evict the least recently used model (first item in OrderedDict)
+        oldest_key, oldest_model = loaded_models.popitem(last=False)
+        logger.info(f"Cache is full (max_models={MAX_WHISPER_MODELS}). Evicting model {oldest_key} to free up memory.")
+        try:
+            # Attempt to clean up model resources
+            # How to properly delete a whisperx model and free GPU memory can be intricate.
+            # For PyTorch models, 'del model' and 'torch.cuda.empty_cache()' are standard.
+            # WhisperX models might have internal CTranslate2 models or other components.
+            # For now, we assume 'del' is sufficient for Python's garbage collector to work,
+            # and empty_cache() helps with PyTorch's CUDA cache.
+            # If whisperx.Model has a specific cleanup method, it should be called here.
+            # (Assuming no specific cleanup method for now beyond Python's GC)
+            del oldest_model 
+            if device == "cuda":
+                torch.cuda.empty_cache()
+            logger.info(f"Model {oldest_key} evicted and CUDA cache cleared (if on CUDA).")
+        except Exception as e:
+            logger.error(f"Error during eviction of model {oldest_key}: {e}", exc_info=True)
+
+    # Load the new model
+    logger.info(f"Loading Whisper model: {model_name} ({model_key_suffix.replace('_lang-','') if model_key_suffix else 'no lang specified'}) on {device} with compute_type {compute_type}")
+    try:
+        model_kwargs = {}
+        if model_name == "large-v3" and language:
+            model_kwargs['language'] = language
+
+        # Explicitly set download_root to ensure it uses the mounted volume,
+        # consistent with previous findings about XDG_CACHE_HOME and Whisper defaults.
+        # The path should be /app/model_cache/whisper inside the container.
+        download_root_path = "/app/model_cache/whisper" 
+        # Ensure the directory exists (Docker should have created it, but good practice)
+        # os.makedirs(download_root_path, exist_ok=True) # This might be too much for here, Dockerfile should handle.
+
+        new_model = whisperx.load_model(
+            model_name,
+            device,
+            compute_type=compute_type,
+            download_root=download_root_path, # Explicitly use the cache path
+            **model_kwargs
+        )
+        loaded_models[model_key] = new_model
+        logger.info(f"Model {model_key} loaded and added to cache. Current cache size: {len(loaded_models)}.")
+        return new_model
+    except Exception as e:
+        logger.error(f"Error loading Whisper model {model_key}: {e}", exc_info=True)
+        # If model loading fails, ensure no partial entry is left in loaded_models for this key
+        if model_key in loaded_models: # Should not happen if it's only added on success
+             del loaded_models[model_key]
+        raise HTTPException(status_code=500, detail=f"Error loading Whisper model {model_key}: {str(e)}")
+>>>>>>> origin/general-adjustments
 
 def get_alignment_model(language_code: str, device: str):
     align_key = (language_code, device)
@@ -76,7 +158,11 @@ def get_alignment_model(language_code: str, device: str):
             model_a, metadata_a = whisperx.load_align_model(
                 language_code=language_code,
                 device=device,
+<<<<<<< HEAD
                 # model_dir="model_cache/alignment" # Opcional
+=======
+                model_dir="/app/model_cache/alignment" # Opcional
+>>>>>>> origin/general-adjustments
             )
             loaded_alignment_models[align_key] = (model_a, metadata_a)
             logger.info(f"Modelo de alineación para {language_code} cargado.")
@@ -155,6 +241,11 @@ async def transcribe_audio(
         detected_language = result["language"] # Este es el idioma detectado/usado por Whisper
         logger.info(f"Transcripción completada. Idioma detectado/usado: {detected_language}")
 
+<<<<<<< HEAD
+=======
+        loaded_audio_data = None # Inicializar variable para datos de audio cargados
+
+>>>>>>> origin/general-adjustments
         # 3. Alinear transcripción (opcional)
         alignment_performed_successfully = False
         if align_audio:
@@ -165,13 +256,24 @@ async def transcribe_audio(
                 try:
                     align_model, align_metadata = get_alignment_model(detected_language, DEVICE)
                     logger.info(f"Alineando transcripción para idioma: {detected_language}...")
+<<<<<<< HEAD
                     # whisperx.load_audio es necesario aquí para pasar el audio cargado, no la ruta
                     audio_for_align = whisperx.load_audio(temp_audio_path)
+=======
+                    if loaded_audio_data is None:
+                        logger.info("Cargando datos de audio para alineación...")
+                        loaded_audio_data = whisperx.load_audio(temp_audio_path)
+                    
+>>>>>>> origin/general-adjustments
                     result = whisperx.align(
                         result["segments"],
                         align_model,
                         align_metadata,
+<<<<<<< HEAD
                         audio_for_align, # Pasar el audio cargado
+=======
+                        loaded_audio_data, # Usar datos de audio cargados
+>>>>>>> origin/general-adjustments
                         DEVICE,
                         return_char_alignments=False
                     )
@@ -197,9 +299,20 @@ async def transcribe_audio(
                 if diarize_pipeline:
                     logger.info("Iniciando diarización...")
                     try:
+<<<<<<< HEAD
                         audio_for_diarize = whisperx.load_audio(temp_audio_path) # Recargar o usar el ya cargado si aplica
                         diarize_segments = diarize_pipeline(
                             {"waveform": torch.from_numpy(audio_for_diarize).unsqueeze(0), "sample_rate": whisperx.SAMPLE_RATE},
+=======
+                        if loaded_audio_data is None:
+                            # Este caso no debería ocurrir si la alineación (que carga el audio) es un prerrequisito.
+                            logger.error("Error crítico: loaded_audio_data es None antes de la diarización, pero la alineación debió cargarlo.")
+                            raise HTTPException(status_code=500, detail="Error interno: datos de audio no cargados para diarización debido a un fallo previo en la carga para alineación.")
+                        
+                        logger.info("Usando datos de audio cargados previamente para diarización.")
+                        diarize_segments = diarize_pipeline(
+                            {"waveform": torch.from_numpy(loaded_audio_data).unsqueeze(0), "sample_rate": whisperx.SAMPLE_RATE},
+>>>>>>> origin/general-adjustments
                             min_speakers=min_speakers,
                             max_speakers=max_speakers
                         )
