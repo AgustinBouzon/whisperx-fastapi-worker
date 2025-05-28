@@ -13,7 +13,8 @@ torch>=2.0.0
 torchaudio>=2.0.0
 
 # Para diarización (requiere token de Hugging Face)
-pyannote.audio==3.1.1 # o una versión más reciente compatible
+#pyannote.audio==3.1.1 # o una versión más reciente compatible
+pyannote.audio==3.3.2
 
 # Dependencias para manejo de audio y otras utilidades
 ffmpeg-python
