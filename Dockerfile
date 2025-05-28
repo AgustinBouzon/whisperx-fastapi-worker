@@ -39,7 +39,8 @@ WORKDIR /app
 RUN mkdir -p /app/model_cache/whisper \
              /app/model_cache/alignment \
              /app/model_cache/huggingface \
-             /app/model_cache/torch_pyannote # pyannote.audio guarda modelos de HF aquí por defecto (HF_HOME)
+             /app/model_cache/torch_pyannote 
+             # pyannote.audio guarda modelos de HF aquí por defecto (HF_HOME)
 
 # Copiar requirements.txt primero para aprovechar el cache de Docker
 COPY ./app/requirements.txt /app/requirements.txt
