@@ -1,0 +1,41 @@
+version: '3.8'
+
+services:
+  whisperx_api_gpu:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: whisperx_api_gpu_service
+    ports:
+      - "8000:8000" # Mapea puerto 8000 del contenedor al 8000 del host
+    volumes:
+      # Mapea directorios de caché para persistir modelos descargados.
+      # Crea estos directorios en tu host si no existen: ./model_cache/*
+      - ./model_cache/whisper:/app/model_cache/whisper
+      - ./model_cache/alignment:/app/model_cache/alignment
+      - ./model_cache/huggingface:/app/model_cache/huggingface # HF_HOME
+      # El directorio XDG_CACHE_HOME (/app/model_cache) es el padre de los otros caches
+      # por lo que montar los subdirectorios específicos es más granular.
+      # Si pyannote.audio guarda directamente en HF_HOME, /app/model_cache/huggingface es suficiente.
+      # Si usa ~/.cache/torch/pyannote, entonces XDG_CACHE_HOME/torch/pyannote.
+      # - ./model_cache/torch_pyannote:/app/model_cache/torch/pyannote # Opcional si HF_HOME es suficiente
+
+    # --- Configuración para GPU (NECESARIA) ---
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              # count: 1 # Reserva una GPU específica (si tienes varias y quieres limitar)
+              # capabilities: [gpu, utility, compute]
+              capabilities: [gpu] # 'gpu' suele ser suficiente
+    # Para versiones más antiguas de Docker Compose, podrías necesitar 'runtime: nvidia'
+    # runtime: nvidia
+
+    environment:
+      LOG_LEVEL: "INFO" # Puedes cambiar a "DEBUG" para más detalles
+      TZ: "America/Buenos_Aires" # Configura tu zona horaria si es necesario
+      # Opcional: Especificar qué GPU usar si tienes varias y 'count' no es 'all'
+      # NVIDIA_VISIBLE_DEVICES: "0" # "all", "0", "0,1", etc.
+
+    restart: unless-stopped

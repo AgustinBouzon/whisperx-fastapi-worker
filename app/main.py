@@ -1,0 +1,278 @@
+import os
+import uuid
+import shutil
+import tempfile
+from fastapi import FastAPI, File, UploadFile, HTTPException, Form
+from fastapi.responses import JSONResponse
+import torch
+import whisperx
+import logging
+
+# Configuración de logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+app = FastAPI(
+    title="WhisperX API (GPU)",
+    description="API para transcripción de audio usando WhisperX con alineación y diarización, optimizada para GPU.",
+    version="0.1.0"
+)
+
+# Variables globales para los modelos
+loaded_models = {}
+loaded_alignment_models = {}
+loaded_diarization_pipelines = {}
+
+# Determinar dispositivo (CUDA si está disponible, si no CPU)
+DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+logger.info(f"Usando dispositivo: {DEVICE}")
+if DEVICE == "cuda":
+    torch_version, cuda_avail = torch.__version__, torch.cuda.is_available()
+    cuda_version = torch.version.cuda if cuda_avail else "N/A"
+    gpu_name = torch.cuda.get_device_name(0) if cuda_avail else "N/A"
+    logger.info(f"PyTorch version: {torch_version}, CUDA disponible: {cuda_avail}, CUDA version: {cuda_version}, GPU: {gpu_name}")
+else:
+    logger.warning("CUDA no está disponible. La API se ejecutará en CPU, lo cual será significativamente más lento.")
+
+
+# Tipos de cómputo recomendados para GPU y CPU
+COMPUTE_TYPE_GPU = "float16"  # o "int8" para menor VRAM y mayor velocidad, con posible pérdida de precisión
+COMPUTE_TYPE_CPU = "int8"     # o "float32" para CPU si "int8" da problemas
+
+# --- Funciones auxiliares ---
+def get_model(model_name: str, device: str, compute_type: str, language: str = None):
+    # Agregar 'language' a la clave si es 'large-v3' para forzar la recarga si cambia el idioma,
+    # ya que 'large-v3' se comporta diferente con/sin especificación de idioma en la carga.
+    model_key_suffix = f"_lang-{language}" if model_name == "large-v3" and language else ""
+    model_key = (model_name + model_key_suffix, device, compute_type)
+
+    if model_key not in loaded_models:
+        logger.info(f"Cargando modelo Whisper: {model_name} en {device} con compute_type {compute_type}{f' para idioma {language}' if model_key_suffix else ''}")
+        try:
+            # Para large-v3, si se proporciona un idioma, es mejor pasarlo a load_model
+            # para una inicialización potencialmente más optimizada para ese idioma.
+            model_kwargs = {}
+            if model_name == "large-v3" and language:
+                model_kwargs['language'] = language
+
+            loaded_models[model_key] = whisperx.load_model(
+                model_name,
+                device,
+                compute_type=compute_type,
+                # download_root="model_cache/whisper" # Opcional, el Dockerfile ya crea este path
+                **model_kwargs
+            )
+            logger.info(f"Modelo Whisper {model_name} cargado exitosamente.")
+        except Exception as e:
+            logger.error(f"Error cargando modelo Whisper {model_name}: {e}", exc_info=True)
+            raise HTTPException(status_code=500, detail=f"Error al cargar modelo Whisper: {str(e)}")
+    return loaded_models[model_key]
+
+def get_alignment_model(language_code: str, device: str):
+    align_key = (language_code, device)
+    if align_key not in loaded_alignment_models:
+        logger.info(f"Cargando modelo de alineación para idioma: {language_code} en {device}")
+        try:
+            model_a, metadata_a = whisperx.load_align_model(
+                language_code=language_code,
+                device=device,
+                # model_dir="model_cache/alignment" # Opcional
+            )
+            loaded_alignment_models[align_key] = (model_a, metadata_a)
+            logger.info(f"Modelo de alineación para {language_code} cargado.")
+        except Exception as e:
+            logger.error(f"Error cargando modelo de alineación para {language_code}: {e}", exc_info=True)
+            # Si no hay modelo de alineación para un idioma, whisperx puede lanzar un error específico
+            if "No pre-trained wav2vec2 model found" in str(e) or "No such file or directory" in str(e):
+                 raise HTTPException(status_code=400, detail=f"No hay modelo de alineación disponible para el idioma: {language_code}. Error: {str(e)}")
+            raise HTTPException(status_code=500, detail=f"Error al cargar modelo de alineación: {str(e)}")
+    return loaded_alignment_models[align_key]
+
+def get_diarization_pipeline(hf_token: str, device: str):
+    diarize_key = (hf_token is not None, device)
+    if diarize_key not in loaded_diarization_pipelines:
+        if not hf_token:
+            logger.warning("No se proporcionó HF_TOKEN. La diarización se omite.")
+            loaded_diarization_pipelines[diarize_key] = None
+            return None
+        logger.info(f"Cargando pipeline de diarización en {device}")
+        try:
+            from pyannote.audio import Pipeline
+            pipeline = Pipeline.from_pretrained("pyannote/speaker-diarization-3.1", use_auth_token=hf_token)
+            # Mover a GPU solo si el dispositivo es CUDA. pyannote puede manejar 'cpu' también.
+            if device == "cuda":
+                pipeline.to(torch.device(device))
+            loaded_diarization_pipelines[diarize_key] = pipeline
+            logger.info("Pipeline de diarización cargada.")
+        except ImportError:
+            logger.error("pyannote.audio no está instalado. Por favor, instálalo para usar diarización.")
+            loaded_diarization_pipelines[diarize_key] = None
+            return None
+        except Exception as e:
+            logger.error(f"Error cargando pipeline de diarización: {e}", exc_info=True)
+            loaded_diarization_pipelines[diarize_key] = None # Marcar como no disponible para evitar reintentos
+            raise HTTPException(status_code=500, detail=f"Error al cargar pipeline de diarización: {str(e)}. Verifique su HF_TOKEN y la conexión a Hugging Face.")
+    return loaded_diarization_pipelines[diarize_key]
+
+# --- Endpoint de Transcripción ---
+@app.post("/transcribe/")
+async def transcribe_audio(
+    audio_file: UploadFile = File(...),
+    model_name: str = Form("base"),
+    language: str = Form(None),
+    batch_size: int = Form(16), # WhisperX recomienda 4, 8, 16 para GPU. Ajustar según VRAM.
+    align_audio: bool = Form(True),
+    diarize_audio: bool = Form(False),
+    hf_token: str = Form(None),
+    min_speakers: int = Form(None),
+    max_speakers: int = Form(None)
+):
+    current_compute_type = COMPUTE_TYPE_GPU if DEVICE == "cuda" else COMPUTE_TYPE_CPU
+    logger.info(f"Solicitud de transcripción: model={model_name}, lang={language or 'auto'}, align={align_audio}, diarize={diarize_audio}, batch_size={batch_size}")
+
+    temp_dir = tempfile.mkdtemp()
+    temp_audio_path = os.path.join(temp_dir, f"{uuid.uuid4()}_{os.path.splitext(audio_file.filename)[1] if audio_file.filename else '.tmp'}")
+
+    try:
+        with open(temp_audio_path, "wb") as buffer:
+            shutil.copyfileobj(audio_file.file, buffer)
+        logger.info(f"Archivo de audio guardado en: {temp_audio_path}")
+
+        # 1. Cargar modelo Whisper
+        # Pasar 'language' a get_model por si es 'large-v3' y se quiere una carga optimizada.
+        model = get_model(model_name, DEVICE, current_compute_type, language=language if model_name == "large-v3" else None)
+
+
+        # 2. Transcribir
+        logger.info("Iniciando transcripción...")
+        # El modelo transcribe directamente la ruta del archivo
+        # Para large-v3, si no se especificó idioma en load_model, pasarlo aquí si está disponible
+        transcribe_kwargs = {}
+        if language:
+            transcribe_kwargs['language'] = language
+
+        result = model.transcribe(temp_audio_path, batch_size=batch_size, print_progress=False, **transcribe_kwargs)
+        detected_language = result["language"] # Este es el idioma detectado/usado por Whisper
+        logger.info(f"Transcripción completada. Idioma detectado/usado: {detected_language}")
+
+        # 3. Alinear transcripción (opcional)
+        alignment_performed_successfully = False
+        if align_audio:
+            if not detected_language:
+                logger.warning("No se pudo detectar el idioma (o no se proporcionó y el modelo no lo devolvió), saltando la alineación.")
+                result["warning_alignment"] = "No se pudo determinar el idioma para la alineación."
+            else:
+                try:
+                    align_model, align_metadata = get_alignment_model(detected_language, DEVICE)
+                    logger.info(f"Alineando transcripción para idioma: {detected_language}...")
+                    # whisperx.load_audio es necesario aquí para pasar el audio cargado, no la ruta
+                    audio_for_align = whisperx.load_audio(temp_audio_path)
+                    result = whisperx.align(
+                        result["segments"],
+                        align_model,
+                        align_metadata,
+                        audio_for_align, # Pasar el audio cargado
+                        DEVICE,
+                        return_char_alignments=False
+                    )
+                    logger.info("Alineación completada.")
+                    alignment_performed_successfully = True
+                except HTTPException as e: # Errores específicos de carga de modelo de alineación
+                    logger.warning(f"No se pudo realizar la alineación: {e.detail}")
+                    result["warning_alignment"] = f"Alineación fallida: {e.detail}"
+                except Exception as e:
+                    logger.error(f"Error inesperado durante la alineación: {e}", exc_info=True)
+                    result["warning_alignment"] = f"Error inesperado en alineación: {str(e)}"
+        
+        # 4. Diarizar (opcional)
+        diarization_performed_successfully = False
+        if diarize_audio:
+            # La diarización requiere que la alineación haya ocurrido para asignar hablantes a palabras.
+            # WhisperX `assign_word_speakers` espera que los segmentos tengan 'word' timings.
+            if not align_audio or not alignment_performed_successfully:
+                logger.warning("Diarización solicitada, pero la alineación no se realizó o falló. La diarización se omitirá o no tendrá información a nivel de palabra.")
+                result["warning_diarization"] = "La diarización a nivel de palabra requiere una alineación exitosa."
+            else:
+                diarize_pipeline = get_diarization_pipeline(hf_token, DEVICE)
+                if diarize_pipeline:
+                    logger.info("Iniciando diarización...")
+                    try:
+                        audio_for_diarize = whisperx.load_audio(temp_audio_path) # Recargar o usar el ya cargado si aplica
+                        diarize_segments = diarize_pipeline(
+                            {"waveform": torch.from_numpy(audio_for_diarize).unsqueeze(0), "sample_rate": whisperx.SAMPLE_RATE},
+                            min_speakers=min_speakers,
+                            max_speakers=max_speakers
+                        )
+                        # Asegurarse de que 'result' contenga segmentos con 'words'
+                        if "segments" in result and result["segments"] and "words" in result["segments"][0]:
+                            result_with_speakers = whisperx.assign_word_speakers(diarize_segments, result)
+                            result["segments"] = result_with_speakers["segments"] # Actualizar segmentos con la info de speaker
+                            # assign_word_speakers puede añadir un top-level 'speaker_segments' si se quiere
+                            # result["speaker_segments"] = diarize_segments # Opcional: devolver los segmentos puros de pyannote
+                            logger.info("Diarización completada y asignada.")
+                            diarization_performed_successfully = True
+                        else:
+                            logger.warning("Los segmentos de transcripción no contienen información de palabras (posible fallo de alineación). No se pueden asignar hablantes a palabras.")
+                            result["warning_diarization"] = "Fallo de alineación impidió asignación de hablantes a palabras."
+
+                    except HTTPException: # Si la pipeline de diarización falla al cargar (ya manejado en get_diarization_pipeline)
+                        raise
+                    except Exception as e:
+                        logger.error(f"Error durante la diarización: {e}", exc_info=True)
+                        result["warning_diarization"] = f"Diarización fallida: {str(e)}"
+                else:
+                    logger.warning("Diarización solicitada pero la pipeline no está disponible (token HF o instalación).")
+                    result["warning_diarization"] = "Pipeline de diarización no disponible (verificar HF_TOKEN)."
+
+        final_response = {
+            "language": detected_language,
+            "language_probability": result.get("language_probability"),
+            "segments": result.get("segments", []), # Asegurar que siempre haya una lista
+            "full_text": result.get("text", " ".join([s.get('text', '').strip() for s in result.get("segments", [])])),
+            "options_used": {
+                "model_name": model_name,
+                "language_requested": language,
+                "batch_size": batch_size,
+                "alignment_performed": align_audio and alignment_performed_successfully,
+                "diarization_performed": diarize_audio and diarization_performed_successfully,
+                "device": DEVICE,
+                "compute_type": current_compute_type
+            }
+        }
+        if "warning_alignment" in result:
+            final_response["options_used"]["alignment_warning"] = result["warning_alignment"]
+        if "warning_diarization" in result:
+            final_response["options_used"]["diarization_warning"] = result["warning_diarization"]
+
+
+        return JSONResponse(content=final_response)
+
+    except HTTPException as e:
+        logger.error(f"HTTP Exception: {e.detail}")
+        raise e
+    except Exception as e:
+        logger.error(f"Error procesando la solicitud: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Error interno del servidor: {str(e)}")
+    finally:
+        if os.path.exists(temp_dir):
+            shutil.rmtree(temp_dir)
+            logger.info(f"Directorio temporal {temp_dir} eliminado.")
+        if audio_file:
+            audio_file.file.close()
+
+@app.get("/health")
+async def health_check():
+    return {"status": "ok", "device_available": DEVICE, "torch_version": torch.__version__, "cuda_available": torch.cuda.is_available()}
+
+# Para desarrollo local (no usado por Docker directamente)
+if __name__ == "__main__":
+    import uvicorn
+    # Para probar diarización localmente con GPU, asegúrate de que CUDA y pyannote estén configurados
+    # y exporta tu token de Hugging Face:
+    # export HF_TOKEN="tu_token_aqui"
+    #
+    # Opcionalmente, para probar en CPU si no tienes GPU localmente:
+    # DEVICE = "cpu" # Forzar CPU para prueba local
+    # logger.info(f"Forzando CPU para desarrollo local.")
+
+    uvicorn.run(app, host="0.0.0.0", port=8000)
