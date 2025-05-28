@@ -18,10 +18,10 @@ whisperx-api-gpu/
 ├── .gitignore
 ├── app/
 │   ├── __init__.py
-│   ├── main.py
-│   └── requirements.txt
+│   └── main.py
 ├── docker-compose.yml
 ├── Dockerfile
+├── requirements.txt
 ├── LICENSE
 └── README.md
 ```
@@ -38,6 +38,7 @@ whisperx-api-gpu/
     mkdir -p ./model_cache/huggingface
     # mkdir -p ./model_cache/torch_pyannote # Opcional, dependiendo de dónde guarde exactamente pyannote
     ```
+    La aplicación está configurada para utilizar estos directorios específicos para almacenar en caché los modelos de transcripción de Whisper (`./model_cache/whisper`), los modelos de alineación (`./model_cache/alignment`), y los modelos descargados de Hugging Face como Pyannote (`./model_cache/huggingface`).
 
 3.  **Token de Hugging Face para Diarización (Opcional pero necesario para diarización):**
     Si planeas usar la diarización de hablantes:
