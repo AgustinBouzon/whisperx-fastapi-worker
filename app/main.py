@@ -49,6 +49,35 @@ COMPUTE_TYPE_CPU = "int8"     # o "float32" para CPU si "int8" da problemas
 
 # --- Funciones auxiliares ---
 def get_model(model_name: str, device: str, compute_type: str, language: str = None):
+    logger.info(f"Entering get_model. Current loaded_models keys: {list(loaded_models.keys())}")
+<<<<<<< HEAD
+    # Agregar 'language' a la clave si es 'large-v3' para forzar la recarga si cambia el idioma,
+    # ya que 'large-v3' se comporta diferente con/sin especificación de idioma en la carga.
+    model_key_suffix = f"_lang-{language}" if model_name == "large-v3" and language else ""
+    model_key = (model_name + model_key_suffix, device, compute_type)
+
+    if model_key not in loaded_models:
+        logger.info(f"Cargando modelo Whisper: {model_name} en {device} con compute_type {compute_type}{f' para idioma {language}' if model_key_suffix else ''}")
+        try:
+            # Para large-v3, si se proporciona un idioma, es mejor pasarlo a load_model
+            # para una inicialización potencialmente más optimizada para ese idioma.
+            model_kwargs = {}
+            if model_name == "large-v3" and language:
+                model_kwargs['language'] = language
+
+            loaded_models[model_key] = whisperx.load_model(
+                model_name,
+                device,
+                compute_type=compute_type,
+                # download_root="model_cache/whisper" # Opcional, el Dockerfile ya crea este path
+                **model_kwargs
+            )
+            logger.info(f"Modelo Whisper {model_name} cargado exitosamente.")
+        except Exception as e:
+            logger.error(f"Error cargando modelo Whisper {model_name}: {e}", exc_info=True)
+            raise HTTPException(status_code=500, detail=f"Error al cargar modelo Whisper: {str(e)}")
+    return loaded_models[model_key]
+=======
     model_key_suffix = f"_lang-{language}" if model_name == "large-v3" and language else ""
     model_key = (model_name + model_key_suffix, device, compute_type)
 
@@ -160,64 +189,68 @@ def get_diarization_pipeline(hf_token: str, device: str):
 # --- Helper function to clear models from memory ---
 def _clear_models_from_memory():
     global loaded_models, loaded_alignment_models, loaded_diarization_pipelines, DEVICE, logger
-
-    logger.info("Starting to clear all AI models from memory...")
+    logger.info("Entering _clear_models_from_memory")
 
     # Clear Whisper models
-    if loaded_models:
-        logger.info(f"Clearing {len(loaded_models)} Whisper model(s)...")
-        # Iterate over a copy of values if direct deletion during iteration is problematic
+    if loaded_models: # Check if not empty
+        logger.info(f"loaded_models before clear: {list(loaded_models.keys())}")
         models_to_delete = list(loaded_models.values())
         for model in models_to_delete:
+            # logger.debug(f"Deleting Whisper model object: {model}") # Optional: too verbose for INFO
             try:
                 del model
             except Exception as e:
-                logger.error(f"Error deleting a Whisper model object: {e}", exc_info=True)
+                logger.error(f"Error deleting a Whisper model object during cleanup: {e}", exc_info=True)
         loaded_models.clear()
-        logger.info("Whisper models dictionary cleared.")
+        logger.info(f"loaded_models after clear: size={len(loaded_models)}")
+    else:
+        logger.info("loaded_models is already empty.")
 
     # Clear Alignment models
     if loaded_alignment_models:
-        logger.info(f"Clearing {len(loaded_alignment_models)} Alignment model(s)...")
-        alignment_models_to_delete = list(loaded_alignment_models.values())
-        for model_tuple in alignment_models_to_delete:
-            if isinstance(model_tuple, tuple) and len(model_tuple) == 2:
-                model_a, metadata_a = model_tuple
+        logger.info(f"loaded_alignment_models before clear: {list(loaded_alignment_models.keys())}")
+        align_models_to_delete = list(loaded_alignment_models.values())
+        for model_tuple in align_models_to_delete:
+            # logger.debug(f"Deleting alignment model objects: {model_tuple}") # Optional
+            if model_tuple is not None: # It can store None if loading failed before
                 try:
-                    del model_a
+                    if isinstance(model_tuple, tuple) and len(model_tuple) > 0:
+                         del model_tuple[0] # model_a
+                    if isinstance(model_tuple, tuple) and len(model_tuple) > 1:
+                         del model_tuple[1] # metadata_a (usually not a large object, but good practice)
+                    del model_tuple # Delete the tuple itself from the list values
                 except Exception as e:
-                    logger.error(f"Error deleting alignment model_a: {e}", exc_info=True)
-                try:
-                    del metadata_a
-                except Exception as e:
-                    logger.error(f"Error deleting alignment metadata_a: {e}", exc_info=True)
-            else:
-                logger.warning(f"Unexpected item in loaded_alignment_models: {model_tuple}")
+                    logger.error(f"Error deleting an alignment model component during cleanup: {e}", exc_info=True)
         loaded_alignment_models.clear()
-        logger.info("Alignment models dictionary cleared.")
+        logger.info(f"loaded_alignment_models after clear: size={len(loaded_alignment_models)}")
+    else:
+        logger.info("loaded_alignment_models is already empty.")
 
     # Clear Diarization pipelines
     if loaded_diarization_pipelines:
-        logger.info(f"Clearing {len(loaded_diarization_pipelines)} Diarization pipeline(s)...")
+        logger.info(f"loaded_diarization_pipelines before clear: {list(loaded_diarization_pipelines.keys())}")
         pipelines_to_delete = list(loaded_diarization_pipelines.values())
         for pipeline in pipelines_to_delete:
-            if pipeline is not None: # Ensure pipeline is not None before attempting deletion
+            # logger.debug(f"Deleting diarization pipeline object: {pipeline}") # Optional
+            if pipeline is not None: # It can store None
                 try:
                     del pipeline
                 except Exception as e:
-                    logger.error(f"Error deleting a Diarization pipeline object: {e}", exc_info=True)
+                    logger.error(f"Error deleting a diarization pipeline object during cleanup: {e}", exc_info=True)
         loaded_diarization_pipelines.clear()
-        logger.info("Diarization pipelines dictionary cleared.")
+        logger.info(f"loaded_diarization_pipelines after clear: size={len(loaded_diarization_pipelines)}")
+    else:
+        logger.info("loaded_diarization_pipelines is already empty.")
 
     if DEVICE == "cuda":
-        logger.info("Clearing CUDA cache...")
+        logger.info("Attempting to clear CUDA cache...")
         try:
             torch.cuda.empty_cache()
-            logger.info("CUDA cache cleared.")
+            logger.info("torch.cuda.empty_cache() called.")
         except Exception as e:
             logger.error(f"Error clearing CUDA cache: {e}", exc_info=True)
     
-    logger.info("Model clearing process completed.")
+    logger.info("Exiting _clear_models_from_memory")
 
 # --- Endpoint de Transcripción ---
 @app.post("/transcribe/")
