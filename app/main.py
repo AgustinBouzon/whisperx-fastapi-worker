@@ -36,7 +36,7 @@ else:
     logger.warning("CUDA no está disponible. La API se ejecutará en CPU, lo cual será significativamente más lento.")
 
 # Configuración de MAX_WHISPER_MODELS
-MAX_WHISPER_MODELS = int(os.environ.get("MAX_WHISPER_MODELS", "2")) # Default to 2 models
+MAX_WHISPER_MODELS = int(os.environ.get("MAX_WHISPER_MODELS", "1")) # Default to 1 model
 if MAX_WHISPER_MODELS <= 0: # Treat 0 or negative as unlimited (effectively disabling unloading)
     MAX_WHISPER_MODELS = float('inf')
 logger.info(f"Maximum concurrent Whisper models allowed in memory: {MAX_WHISPER_MODELS if MAX_WHISPER_MODELS != float('inf') else 'Unlimited'}")
