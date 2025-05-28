@@ -28,9 +28,9 @@ whisperx-api-gpu/
 
 ## Configuración y Ejecución
 
-1.  **Clona este repositorio.**
+1. **Clona este repositorio.**
 
-2.  **Prepara los directorios de caché (recomendado para persistencia de modelos):**
+2. **Prepara los directorios de caché (recomendado para persistencia de modelos):**
     En la raíz del proyecto, crea los directorios donde se guardarán los modelos descargados:
 
     ```bash
@@ -42,7 +42,7 @@ whisperx-api-gpu/
 
     La aplicación está configurada para utilizar estos directorios específicos para almacenar en caché los modelos de transcripción de Whisper (`./model_cache/whisper`), los modelos de alineación (`./model_cache/alignment`), y los modelos descargados de Hugging Face como Pyannote (`./model_cache/huggingface`).
 
-3.  **Token de Hugging Face para Diarización (Opcional pero necesario para diarización):**
+3. **Token de Hugging Face para Diarización (Opcional pero necesario para diarización):**
     Si planeas usar la diarización de hablantes:
 
     - Abre el archivo `docker-compose.yml`.
@@ -57,7 +57,7 @@ whisperx-api-gpu/
 
     Alternativamente, puedes pasar el token en cada request a la API.
 
-4.  **Construir la imagen Docker:**
+4. **Construir la imagen Docker:**
     Navega al directorio raíz del proyecto y ejecuta:
 
     ```bash
@@ -66,7 +66,7 @@ whisperx-api-gpu/
 
     Esto utilizará el `Dockerfile` para construir una imagen llamada `whisperx_api_gpu_service` (o similar, basado en el nombre del directorio del proyecto si `container_name` no está definido en compose).
 
-5.  **Ejecutar el contenedor:**
+5. **Ejecutar el contenedor:**
 
     ```bash
     docker-compose up -d
@@ -74,7 +74,7 @@ whisperx-api-gpu/
 
     Esto iniciará el servicio en segundo plano. Docker Compose se encargará de pasar las capacidades de GPU al contenedor.
 
-6.  **Verificar que la API está funcionando y usando GPU:**
+6. **Verificar que la API está funcionando y usando GPU:**
 
     - **Logs del contenedor:**
 
@@ -95,6 +95,7 @@ whisperx-api-gpu/
       `{"status":"ok","device_available":"cuda","torch_version":"2.1.2+cu121","cuda_available":true}`
 
     - **Documentación Interactiva (Swagger UI):**
+
       ```
       http://localhost:8000/docs
       ```
