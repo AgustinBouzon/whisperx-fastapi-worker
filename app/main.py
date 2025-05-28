@@ -168,10 +168,11 @@ async def transcribe_audio(
     diarize_audio: bool = Form(False),
     hf_token: str = Form(None),
     min_speakers: int = Form(None),
-    max_speakers: int = Form(None)
+    max_speakers: int = Form(None),
+    word_level_timestamps: bool = Form(True)
 ):
     current_compute_type = COMPUTE_TYPE_GPU if DEVICE == "cuda" else COMPUTE_TYPE_CPU
-    logger.info(f"Solicitud de transcripción: model={model_name}, lang={language or 'auto'}, align={align_audio}, diarize={diarize_audio}, batch_size={batch_size}")
+    logger.info(f"Solicitud de transcripción: model={model_name}, lang={language or 'auto'}, align={align_audio}, diarize={diarize_audio}, batch_size={batch_size}, word_level_timestamps={word_level_timestamps}")
 
     temp_dir = tempfile.mkdtemp()
     temp_audio_path = os.path.join(temp_dir, f"{uuid.uuid4()}_{os.path.splitext(audio_file.filename)[1] if audio_file.filename else '.tmp'}")
@@ -202,7 +203,7 @@ async def transcribe_audio(
 
         # 3. Alinear transcripción (opcional)
         alignment_performed_successfully = False
-        if align_audio:
+        if align_audio and word_level_timestamps:
             if not detected_language:
                 logger.warning("No se pudo detectar el idioma (o no se proporcionó y el modelo no lo devolvió), saltando la alineación.")
                 result["warning_alignment"] = "No se pudo determinar el idioma para la alineación."
@@ -290,8 +291,9 @@ async def transcribe_audio(
                 "model_name": model_name,
                 "language_requested": language,
                 "batch_size": batch_size,
-                "alignment_performed": align_audio and alignment_performed_successfully,
+                "alignment_performed": align_audio and alignment_performed_successfully and word_level_timestamps, # Reflects if alignment for word-level was attempted and successful
                 "diarization_performed": diarize_audio and diarization_performed_successfully,
+                "word_level_timestamps_requested": word_level_timestamps,
                 "device": DEVICE,
                 "compute_type": current_compute_type
             }
